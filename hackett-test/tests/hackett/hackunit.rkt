@@ -5,8 +5,7 @@
           syntax/parse
           racket/pretty
           (only-in hackett/private/typecheck
-                   type<:!
-                   type<:/elaborate!))
+                   type<:!))
          (only-in hackett/private/base
                   τ⇒!
                   current-type-context)
@@ -29,7 +28,7 @@
           #;(pretty-print (list e- t_e))
           (define t_expected+
             (expand-type (type-namespace-introduce #'t_expected)))]
-     #:when (type<:/elaborate! t_e t_expected+ #:src #'e)
+     #:when (type<:! t_e t_expected+ #:src #'e)
      #'(void)]
     [(_ e (~datum :) t_expected (~datum ->) v_expected) ; runtime val
      #:do[(define-values (e- t_e) (τ⇒! #'e))
@@ -37,7 +36,7 @@
           #;(pretty-print (list e- t_e))
           (define t_expected+
             (expand-type (type-namespace-introduce #'t_expected)))]
-     #:when (type<:/elaborate! t_e t_expected+ #:src #'e)
+     #:when (type<:! t_e t_expected+ #:src #'e)
      #`(check-equal? (force #,e-) v_expected)]))
 
 (define-syntax (typecheck-fail stx)

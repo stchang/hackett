@@ -89,6 +89,29 @@
              #:attr fixity #f
              #:attr out #f])
 
+  (define (mk--> args out)
+    (foldr #{begin #`(@%app -> #,%1 #,%2)}
+           out
+           (map type-namespace-introduce args)))
+  
+  (define-splicing-syntax-class gadt-constructor-spec
+    #:attributes [tag [arg 1] len nullary? fixity type]
+    #:commit
+    #:description #f
+    #;[pattern (~and type (~do (displayln #'type))) ; for debugging
+             #:fail-unless #f "ads"
+             #:attr fixity #f #:with (arg ...) #'() #:attr tag #'void #:attr len 0 #:attr nullary? #f]
+    [pattern {~seq [tag:id (~datum ::) ((~datum forall) Xs arg ...+ (~datum ->) out)]
+                   {~optional :fixity-annotation}}
+             #:attr nullary? #f
+             #:attr len (length (attribute arg))
+             #:attr type (type-namespace-introduce #`(forall Xs #,(mk--> (attribute arg) #'out)))]
+    [pattern {~seq [tag:id (~datum ::) arg ...+ (~datum ->) out]
+                   {~optional :fixity-annotation}}
+             #:attr nullary? #f
+             #:attr len (length (attribute arg))
+             #:attr type (type-namespace-introduce #`(forall () #,(mk--> (attribute arg) #'out)))])
+
   (struct type-constructor (type arity data-constructors fixity)
     #:transparent
     #:property prop:procedure
@@ -479,11 +502,48 @@
    ; calculate the result type of the data constructor, after being applied to args (if any)
    #:with τ_result (if (attribute τ.nullary?) #'τ.tag (type-namespace-introduce #'constructor.out))
    ; calculate the type of the underlying constructor, with arguments, unquantified
-   #:with τ_con_unquantified (foldr #{begin #`(@%app -> #,%1 #,%2)}
-                                    #'τ_result
-                                    (map type-namespace-introduce (attribute constructor.arg)))
+   #:with τ_con_unquantified (mk--> (attribute constructor.arg) #'τ_result)
    ; quantify the type using the type variables in τ, then evaluate the type
    #:with τ_con:type #'(forall [τ.arg ...] τ_con_unquantified)
+   #:with [field ...] (generate-temporaries (attribute constructor.arg))
+   #:with fixity (attribute constructor.fixity)
+   #`(begin-
+       (define-values- [] τ_con.residual)
+       ; check if the constructor is nullary or not
+       #,(if (attribute constructor.nullary?)
+             ; if it is, just define a value
+             #'(begin-
+                 (define- tag-
+                   (let- ()
+                     (struct- constructor.tag ())
+                     (constructor.tag)))
+                 (define-syntax- constructor.tag
+                   (data-constructor
+                    (make-typed-var-transformer #'tag- (quote-syntax τ_con.expansion))
+                    (quote-syntax τ_con.expansion)
+                    (match-lambda [(list) #'(app force- (==- tag-))])
+                    'fixity)))
+             ; if it isn’t, define a constructor function
+             #`(splicing-local- [(struct- tag- (field ...) #:transparent
+                                          #:reflection-name 'constructor.tag)
+                                 (define- #,(foldl #{begin #`(#,%2 #,%1)}
+                                                   #'tag-/curried
+                                                   (attribute field))
+                                   (tag- field ...))]
+                 (define-syntax- constructor.tag
+                   (data-constructor (make-typed-var-transformer #'tag-/curried
+                                                                 (quote-syntax τ_con.expansion))
+                                     (quote-syntax τ_con.expansion)
+                                     (match-lambda [(list field ...)
+                                                    #`(app force- (tag- #,field ...))])
+                                     'fixity)))))])
+
+;; TODO: combine with define-data-constructor
+(define-syntax-parser define-gadt-constructor
+  [(_ [τ:type-constructor-spec] [constructor:gadt-constructor-spec])
+   #:with tag- (generate-temporary #'constructor.tag)
+   #:with tag-/curried (generate-temporary #'constructor.tag)
+   #:with τ_con:type #'constructor.type
    #:with [field ...] (generate-temporaries (attribute constructor.arg))
    #:with fixity (attribute constructor.fixity)
    #`(begin-
@@ -531,6 +591,20 @@
                                (list #'constructor.tag ...)
                                'fixity))
        (define-data-constructor τ* constructor) ...
+       (derive-instance class-id τ*.tag) ...)]
+  [(_ τ:type-constructor-spec constructor:gadt-constructor-spec ...
+      {~optional
+       {~seq #:deriving [{~type {~var class-id (class-id #:require-deriving-transformer? #t)}} ...]}
+       #:defaults ([[class-id 1] '()])})
+   #:with [τ*:type-constructor-spec] (type-namespace-introduce #'τ)
+   #:with fixity (attribute τ.fixity)
+   #`(begin-
+       (define-syntax- τ*.tag (type-constructor
+                               #'(#%type:con τ*.tag)
+                               '#,(attribute τ*.len)
+                               (list #'constructor.tag ...)
+                               'fixity))
+       (define-gadt-constructor τ* constructor) ...
        (derive-instance class-id τ*.tag) ...)])
 
 (begin-for-syntax
