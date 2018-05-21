@@ -155,22 +155,24 @@
                       (free-identifier=? x^ (ctx:solution-x^ %))} ctx)
          ctx:solution-t))
 
-(define/contract (apply-subst ctx t)
-  (-> ctx? type? type?)
+(define/contract (apply-subst ctx t #:subst-rigid? [subst-rigid? #f])
+  (->* (ctx? type?) (#:subst-rigid? boolean?) type?)
   (syntax-parse t
     #:context 'apply-subst
     #:literal-sets [type-literals]
     [_:id t]
     [(#%type:wobbly-var x) (let ([s (ctx-find-solution ctx #'x)])
-                             (if s (apply-subst ctx s) t))]
+                             (if s (apply-subst ctx s #:subst-rigid? subst-rigid?) t))]
+    [(#%type:rigid-var x) (let ([s (ctx-find-solution ctx #'x)])
+                             (if s (apply-subst ctx s #:subst-rigid? subst-rigid?) t))]
     [(#%type:rigid-var _) t]
     [(#%type:con _) t]
     [(head:#%type:app a b) (quasisyntax/loc/props this-syntax
-                             (head #,(apply-subst ctx #'a) #,(apply-subst ctx #'b)))]
+                             (head #,(apply-subst ctx #'a #:subst-rigid? subst-rigid?) #,(apply-subst ctx #'b #:subst-rigid? subst-rigid?)))]
     [(head:#%type:forall x t) (quasisyntax/loc/props this-syntax
-                                (head x #,(apply-subst ctx #'t)))]
+                                (head x #,(apply-subst ctx #'t #:subst-rigid? subst-rigid?)))]
     [(head:#%type:qual a b) (quasisyntax/loc/props this-syntax
-                              (head #,(apply-subst ctx #'a) #,(apply-subst ctx #'b)))]))
+                              (head #,(apply-subst ctx #'a #:subst-rigid? subst-rigid?) #,(apply-subst ctx #'b #:subst-rigid? subst-rigid?)))]))
 (define (apply-current-subst t)
   (apply-subst (current-type-context) t))
 
@@ -205,12 +207,15 @@
 ;; ---------------------------------------------------------------------------------------------------
 ;; subsumption, instantiation, and elaboration
 
-(define/contract (type<:/full! a b #:src src #:elaborate? elaborate?)
+(define/contract (type<:/full! a b #:src src #:elaborate? elaborate? #:unify-rigid? [unify-rigid? #f])
   (->i ([a type?]
         [b type?]
         #:src [src syntax?]
         #:elaborate? [elaborate? boolean?])
+       (#:unify-rigid? [unify-rigid? boolean?])
        [result (elaborate?) (if elaborate? (listof constr?) void?)])
+  ;; (printf "type<:1 ~a\n" a)
+  ;; (printf "type<:2 ~a\n" b)
   (define no-op (if elaborate? '() (void)))
   (syntax-parse (list (apply-current-subst a) (apply-current-subst b))
     #:context 'type<:/full!
@@ -233,8 +238,8 @@
     ; <:→
     ; we need to handle → specially since it is allowed to be applied to polytypes
     [[(~-> a b) (~-> c d)]
-     (type<:! #'c #'a #:src src)
-     (type<:! #'b #'d #:src src)
+     (type<:! #'c #'a #:src src #:unify-rigid? unify-rigid?)
+     (type<:! #'b #'d #:src src #:unify-rigid? unify-rigid?)
      no-op]
     ; <:App
     [[(#%type:app a b) (#%type:app c d)]
@@ -242,8 +247,8 @@
        (unless (type-mono? t)
          (raise-syntax-error #f (~a "illegal polymorphic type " (type->string t)
                                     ", impredicative polymorphism is not supported") src)))
-     (type<:! #'a #'c #:src src)
-     (type<:! #'b #'d #:src src)
+     (type<:! #'a #'c #:src src #:unify-rigid? unify-rigid?)
+     (type<:! #'b #'d #:src src #:unify-rigid? unify-rigid?)
      no-op]
     ; <:∀L
     [[(#%type:forall x a) b]
@@ -268,6 +273,17 @@
      #:when (not (member #'x^ (type-vars^ #'a) free-identifier=?))
      (type-inst-r! #'a #'x^)
      no-op]
+    [[(#%type:rigid-var x^) a]
+     #:when unify-rigid?
+     #:when (not (member #'x^ (type-vars^ #'a) free-identifier=?))
+     (type-inst-l! #'x^ #'a)
+     no-op]
+    ; <:InstantiateR
+    [[a (#%type:rigid-var x^)]
+     #:when unify-rigid?
+     #:when (not (member #'x^ (type-vars^ #'a) free-identifier=?))
+     (type-inst-r! #'a #'x^)
+     no-op]
     [[a b]
      (raise-syntax-error 'typechecker
                          (~a "type mismatch\n"
@@ -279,9 +295,9 @@
   (-> type? type? #:src syntax? (listof constr?))
   (type<:/full! a b #:src src #:elaborate? #t))
 
-(define/contract (type<:! a b #:src src)
-  (-> type? type? #:src syntax? void?)
-  (type<:/full! a b #:src src #:elaborate? #f))
+(define/contract (type<:! a b #:src src #:unify-rigid? [unify-rigid? #f])
+  (->* (type? type? #:src syntax?) (#:unify-rigid? boolean?) void?)
+  (type<:/full! a b #:src src #:elaborate? #f #:unify-rigid? unify-rigid?))
 
 (define/contract (type-inst-l! x^ t)
   (-> identifier? type? void?)
