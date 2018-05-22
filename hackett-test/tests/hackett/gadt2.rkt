@@ -91,18 +91,32 @@
    [[(Pair e1 e2)] (Tuple (eval e1) (eval e2))])
  #:with-msg (tyerrmsg #:got "Integer" #:expected "A" #:in "1"))
 
-;(typecheck-fail/toplvl
-;; TODO: this should be type err??
- (defn bad-eval : (forall (A) (-> (Term A) A))
+(typecheck-fail/toplvl
+ (defn eval : (forall (A) (-> (Term A) A))
    [[(Lit i)] i]
-   [[(Inc t)] {(bad-eval t) + 1}]
-   [[(IsZ t)] (= 0 (bad-eval t))]
-   [[(If b e1 e2)] (if (bad-eval b) (bad-eval e1) (bad-eval e2))]
-   [[(Pair e1 e2)] (Tuple (bad-eval e2) (bad-eval e1))]) ; pair elements flipped
-(check-type (bad-eval (Pair (Lit 0) (IsZ (Lit 0)))) : (Tuple Integer Bool)) ; TODO: unsound!
-(check-type (fst (bad-eval (Pair (Lit 0) (IsZ (Lit 0))))) : Integer -> True) ; TODO: unsound!
-(check-type (snd (bad-eval (Pair (Lit 0) (IsZ (Lit 0))))) : Bool -> 0) ; TODO: unsound!
- ;#:with-msg (tyerrmsg #:got "Integer" #:expected "A" #:in "1"))
+   [[(Inc t)] {(eval t) + 1}]
+   [[(IsZ t)] (= 0 (eval t))]
+   [[(If b e1 e2)] (if (eval b) (eval e1) (eval e2))]
+   [[(Pair e1 e2)] (Tuple (eval e2) (eval e1))]) ; wrong type: pair elements flipped
+ #:with-msg (tyerrmsg #:got "B" #:expected "A"))
+
+(typecheck-fail/toplvl
+ (defn eval : (forall (A) (-> (Term A) A))
+   [[(Lit i)] i]
+   [[(Inc t)] {(eval t) + 1}]
+   [[(IsZ t)] (= 0 (eval t))]
+   [[(If b e1 e2)] (if (eval b) (eval e1) (eval e2))]
+   [[(Pair e1 e2)] (Tuple (eval e1) (eval e1))]) ; wrong type: pair with same type
+ #:with-msg (tyerrmsg #:got "A" #:expected "B"))
+
+(typecheck-fail/toplvl
+ (defn eval : (forall (A) (-> (Term A) A))
+   [[(Lit i)] i]
+   [[(Inc t)] {(eval t) + 1}]
+   [[(IsZ t)] (= 0 (eval t))]
+   [[(If b e1 e2)] (if (eval b) (eval e1) (eval e2))]
+   [[(Pair e1 e2)] (Tuple (eval e1) 1)]) ; wrong type: pair with concrete types
+ #:with-msg (tyerrmsg #:got "Integer" #:expected "B"))
 
 ;; exhaustive checks
 (typecheck-fail/toplvl
@@ -141,3 +155,4 @@
    [[(If b t e)] (if (eval b) (eval t) (eval e))])
    ;[[(Pair e1 e2)] (Tuple (eval e1) (eval e2))]
  #:with-msg "unmatched case.*Pair")
+

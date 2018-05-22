@@ -175,6 +175,18 @@
     (-> data-constructor? (values (listof type?) type?))
     (function-type-args/result! (data-constructor-type ctor)))
 
+  ;; like data-constructor-args/result!, except returns rigid-vars for parameterized types
+  (define/contract (gadt-constructor-args/result! ctor)
+    (-> data-constructor? (values (listof type?) type?))
+    (syntax-parse (data-constructor-type ctor)
+      #:context 'function-type-args/result!
+      #:literal-sets [type-literals]
+      [(~#%type:forall* [x ...] (~->* t ... r))
+       #:with [x^ ...] (generate-temporaries (attribute x))
+       #:do [(define inst-map (map cons (attribute x) (syntax->list #'[(#%type:rigid-var x^) ...])))]
+       (values (map #{insts % inst-map} (attribute t))
+               (insts #'r inst-map))]))
+
   (define/contract (data-constructor-arity ctor)
     (-> data-constructor? exact-integer?)
     (function-type-arity (data-constructor-type ctor)))
@@ -301,13 +313,14 @@
              #:attr pat (pat-int this-syntax #'int)
              #:attr disappeared-uses '()])
 
-  (define/contract (pat⇒! pat)
-    (-> pat?
-        (values
-         type?                                        ; the inferred type the pattern matches against;
-         (listof (cons/c identifier? type?))          ; the types of bindings produced by the pattern;
-         (-> (listof identifier?)                     ; a function that produces a Racket `match`
-             (values syntax? (listof identifier?))))) ; pattern given a set of binding ids
+  (define/contract (pat⇒! pat #:gadt? [gadt? #f])
+    (->* (pat?)
+         (#:gadt? boolean?)
+         (values
+          type?                                        ; the inferred type the pattern matches against;
+          (listof (cons/c identifier? type?))          ; the types of bindings produced by the pattern;
+          (-> (listof identifier?)                     ; a function that produces a Racket `match`
+              (values syntax? (listof identifier?))))) ; pattern given a set of binding ids
     (match pat
       [(pat-var _ id)
        (let ([a^ (generate-temporary)])
@@ -321,7 +334,9 @@
       [(pat-int _ int)
        (values (expand-type #'Integer) '() #{values #`(app force- #,int) %})]
       [(pat-con _ con pats)
-       (let*-values ([(τs_args τ_result) (data-constructor-args/result! con)]
+       (let*-values ([(τs_args τ_result) (if gadt?
+                                             (gadt-constructor-args/result! con)
+                                             (data-constructor-args/result! con))]
                      [(assumps mk-pats) (pats⇐! pats τs_args)])
          (values τ_result assumps
                  (λ (ids) (let-values ([(match-pats rest) (mk-pats ids)])
@@ -332,6 +347,15 @@
         (values (listof (cons/c identifier? type?))
                 (-> (listof identifier?) (values syntax? (listof identifier?)))))
     (let-values ([(t_⇒ assumps mk-pat) (pat⇒! pat)])
+      (type<:! t_⇒ t #:src (pat-base-stx pat) #:unify-rigid? #t)
+      (values assumps mk-pat)))
+
+  ;; same as pat⇐! except calls pat⇒! with #:gadt? #t
+  (define/contract (gadt-pat⇐! pat t)
+    (-> pat? type?
+        (values (listof (cons/c identifier? type?))
+                (-> (listof identifier?) (values syntax? (listof identifier?)))))
+    (let-values ([(t_⇒ assumps mk-pat) (pat⇒! pat #:gadt? #t)])
       (type<:! t_⇒ t #:src (pat-base-stx pat) #:unify-rigid? #t)
       (values assumps mk-pat)))
 
@@ -651,12 +675,13 @@
              (define-values (assumpss mk-match-pats)
                (for/lists [assumpss mk-match-pats]
                           ([pat (in-list pats)]
-                           ;                         [val- (in-list (attribute val-))]
+;                           [val- (in-list (attribute val-))]
                            [ty-val (in-list (attribute t_val))])
                  (when DEBUG-CLAUSES
-                   (printf "pat: ~a\n" (syntax->datum (pat-base-stx pat)))
+;                   (printf "pat:\n") (pretty-print pat)
+                   (printf "pat stx: ~a\n" (syntax->datum (pat-base-stx pat)))
                    (printf "body: ~a\n" (syntax->datum bod)))
-                 (pat⇐! pat ty-val)))
+                 (gadt-pat⇐! pat ty-val)))
              (define assumps (append* assumpss))
              (when DEBUG-CLAUSES
                (printf "body expected ty (inst'ed): ~a\n"
