@@ -632,9 +632,24 @@
        (derive-instance class-id τ*.tag) ...)])
 
 (begin-for-syntax
-  (define (print-current-subst [txt ""])
-    (printf "current subst~a:\n" txt)
-    (pretty-print (current-type-context)))
+  ;; TODO: fix this naive merging function?
+  ;; append given ctxs, and eliminate anything with dup entries
+  (define (merge-ctxs ctxs)
+    (define ctx (apply append ctxs))
+    (apply
+     append
+     (filter
+      (lambda (lst) (= (length lst) 1)) ; filter out anything with dups
+      (group-by
+       (match-lambda [`#s(ctx:solution ,x ,_) x])
+       ctx
+       free-identifier=?))))
+  (define (print-ctx ctx) (print-current-subst #:ctx ctx))
+  (define (print-current-subst [txt ""] #:ctx (ctx (current-type-context)))
+    (if (equal? txt "")
+        (printf "current subst: ----------\n")
+        (printf "current subst (~a): ----------\n" txt))
+    (pretty-print ctx))
   (define-syntax-class (case*-clause num-pats)
     #:attributes [[pat 1] [pat.pat 1] pat.disappeared-uses body]
     #:description "a pattern-matching clause"
@@ -653,6 +668,12 @@
            (lambda ()
              (for/lists (vals tys) ([val (in-list (attribute val))]) (τ⇒! val)))
            list)
+
+   #:do[(define DEBUG-SUBSTS #f)
+        (when DEBUG-SUBSTS
+          (printf "t_vals: ~a\n" (syntax->datum #'(t_val ...)))
+          (print-current-subst "after τ⇒! val"))]
+
    #:do [; Determine the type to use to unify all of the body clauses. If there is
          ; an expected type (from τ⇐/λ!), then use that type, otherwise generate a
          ; wobbly var that will be unified against each body type.
@@ -662,8 +683,8 @@
 
          (define DEBUG-CLAUSES #f)
 
-         (define-values (match-pats- bodies-)
-           (for/lists [match-pats- bodies-]
+         (define-values (match-pats- bodies- saved-substs)
+           (for/lists [match-pats- bodies- saved-substs]
                       ([clause (in-list (attribute clause))]
                        [pats (in-list (attribute clause.pat.pat))]
                        [bod (in-list (attribute clause.body))])
@@ -682,6 +703,9 @@
                    (printf "pat stx: ~a\n" (syntax->datum (pat-base-stx pat)))
                    (printf "body: ~a\n" (syntax->datum bod)))
                  (gadt-pat⇐! pat ty-val)))
+
+             (when DEBUG-SUBSTS (print-current-subst "after gadt-pat⇐! pat ty-val"))
+             
              (define assumps (append* assumpss))
              (when DEBUG-CLAUSES
                (printf "body expected ty (inst'ed): ~a\n"
@@ -690,10 +714,14 @@
                                      #:subst-rigid? #t))))
              (define-values (bound-ids- body-)
                (τ⇐/λ! bod (apply-subst (current-type-context) t_body #:subst-rigid? #t) assumps))
+
+             (when DEBUG-SUBSTS (print-current-subst "after τ⇐/λ! bod"))
+
              (when DEBUG-CLAUSES
                (printf "body-: ~a\n" (syntax->datum body-))
                (print-current-subst))
-             ;; reset the context for each clause
+             ;; save and reset the context for each clause
+             (define saved-subst (current-type-context))
              (current-type-context old-subst)
              (match-define-values (match-pats- (list))
                (for/fold ([match-pats- '()]
@@ -703,7 +731,7 @@
                    (values (cons match-pat- match-pats-) bound-ids-*))))
              ; Collect the racket/match patterns into a single, multi-pattern clause.
              (define match-pat- (quasisyntax/loc clause (#,@(reverse match-pats-))))
-             (values match-pat- body-)))
+             (values match-pat- body- saved-subst)))
          
 ;;          ; Infer the types of each clause and expand the bodies. Each clause has N patterns, each of
 ;;          ; which match against a particular type, and it also has a body, which must be typechecked
@@ -773,6 +801,10 @@
            (apply-current-subst t_body))
          (when DEBUG-CLAUSES
            (printf "result type : ~a\n" (syntax->datum t_result)))]
+   #:do[(when DEBUG-SUBSTS (map print-ctx saved-substs))
+        ;; restore the type context, for inference and type class elaboration
+        (current-type-context (merge-ctxs saved-substs))
+        (when DEBUG-SUBSTS (print-current-subst "end"))]
 
    ; Finally, we can actually emit the result syntax, using racket/match.
    #:with [match-pat- ...] match-pats-

@@ -28,7 +28,7 @@
 (check-type (eval (Snd (Par (Lit 0) (Boo False)))) : Bool)
 
 ;; TODO: fix gadt exhaustiveness checking
-(defn eval2 : (-> (Term Integer) Integer)
+#;(defn eval2 : (-> (Term Integer) Integer)
   [[(Lit i)] i])
 ;  [[(Boo b)] b]
 ;  [[(Par e1 e2)] (Tuple (eval e1) (eval e2))]
